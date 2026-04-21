@@ -1,4 +1,6 @@
-#webアプリケーションで使用するためのノート
+#Webapp
+webアプリケーションで使用するためのノートです
+
 ##内容
 - MVCモデルをベースに考える
 - Visal Stadioの.Net Freamwake系列のテンプレート
