@@ -6,17 +6,17 @@ Imports System.Net.Mail
 
 
 '''*****************************************************************************
-'''  システム名  ：
+'''  システム名  ：製品開発管理知ワークフローシステム
 ''' <summary>
-''' クラス概要   ：
+''' クラス概要   ：ステップ管理表のフォローメール送信
 ''' </summary>
 ''' <remarks>
-''' クラス名     ：
-''' クラス説明   ：
+''' クラス名     ：SAA1B010
+''' クラス説明   ：作成予定日を過ぎた帳票に対してフォローメールを送信する
 ''' </remarks>
 ''' <history>
-''' 日付 
-''' 26/03/28     
+''' 日付         改訂内容                               P-№   改訂者    マーク
+''' 26/03/28     新規作成                               240496 MEDigital 210294A
 ''' </history>
 '''*****************************************************************************
 Module mdlMain
@@ -35,7 +35,7 @@ Module mdlMain
         Main = 9
 
         Dim SendTargetData As DataTable
-        
+
         Try
             ConsoleWriteLine("フォローメール送信処理 開始")
 
@@ -217,16 +217,11 @@ Module mdlMain
     Private Function SendFollowMail(ByVal pTable As DataTable) As Boolean
         SendFollowMail = False
 
-        Dim MailMsg As MailMessage = New MailMessage
         Dim smtp As SmtpClient = New SmtpClient
         Dim strSubject As New StringBuilder
         Dim strBody As New StringBuilder
         Dim strLog As New StringBuilder
         Dim mail_to As New ArrayList    ' 取得項目(メール宛先用)
-        Dim mail_cc As New ArrayList    ' 取得項目(メール写し用)
-
-
-
 
         Try
 
@@ -251,147 +246,137 @@ Module mdlMain
             Dim i As Integer = 0
             For Each list In listOfLists
                 '管理番号ごとのグループ
-                Dim Stepkanri As New Dictionary(Of String, Date)()
-                Dim Stepkatamei As New Dictionary(Of String, Dictionary(Of String, Date))()
+                Dim targetDict As New Dictionary(Of String, Date)()
+                Dim thresholdDate As Date = Now.AddDays(-1)
+                Dim katameiFlg As Boolean = False
 
-                If list(0)("KATAMEI") = "-" Then
-                    For Each row As DataRow In list
-                        'ここで管理番号毎まで分割
-                        MailMsg = New MailMessage
+                For Each row As DataRow In list
+                    If row.IsNull("KANRYO_DATE") Then
+                        Dim kanriNo As String = row.Field(Of String)("KANRI_NO")
+                        Dim chohyoCd As String = row.Field(Of String)("CHOHYO_CD")
+                        Dim katamei As String = row.Field(Of String)("KATAMEI")
+                        Dim yoteiDate As Date = row.Field(Of Date)("YOTEI_DATE")
 
-                        '送信元の設定
-                        MailMsg.From = New MailAddress(strFromAdd)
+                        If thresholdDate <= yoteiDate Then Continue For
 
+                        Dim key As String
+                        If katamei = "-" Then
+                            key = kanriNo & "|" & chohyoCd
+                        Else
+                            key = kanriNo & "|" & katamei & "|" & chohyoCd
+                            katameiFlg = True
+                        End If
 
-                        If row.IsNull("KANRYO_DATE") Then
-                            If Stepkanri.ContainsKey(row(2)) Then
-                                If Stepkanri(row(2)) > row(6) Then
-                                    Stepkanri(row(2)) = row(6)
-                                End If
-                            Else
-                                If Now.AddDays(-1) > row(6) Then
-                                    Stepkanri.Add(row(2), row(6))
-                                End If
+                        If targetDict.ContainsKey(key) Then
+                            If targetDict(key) > yoteiDate Then
+                                targetDict(key) = yoteiDate
                             End If
                         Else
-                            Continue For
+                            targetDict.Add(key, yoteiDate)
                         End If
+                    End If
+                Next
+
+                If targetDict.Count = 0 Then
+                    Continue For
+                End If
+
+
+                Dim AddressTable As DataTable
+                Dim done As Boolean = False 'メールキャンセル
+                AddressTable = getTable("MAIL", list(0)("DOC_ID"))
+                Dim addressList As New List(Of String)
+
+                'アドレスが取得できない場合は抜ける
+                If AddressTable.Rows.Count > 0 Then
+                    For Each address In AddressTable.Rows
+                        addressList.Add(address("MAIL_ADDRESS"))
                     Next
                 Else
-                    For Each row As DataRow In list
-                        'ここで管理番号毎まで分割
-                        MailMsg = New MailMessage
-
-                        '送信元の設定
-                        MailMsg.From = New MailAddress(strFromAdd)
-
-                        '辞書型構成{形名,{帳票名, 予定日}}
-                        If row.IsNull("KANRYO_DATE") Then
-                            If Stepkatamei.ContainsKey(row(8)) = False Then
-
-                                Stepkatamei(row(8)) = New Dictionary(Of String, Date)()
-
-                                If Now.AddDays(-1) > row(6) Then
-                                    Stepkatamei(row(8)).Add(row(2), row(6))
-                                End If
-
-                            Else
-                                If Stepkatamei(row(8)).ContainsKey(row(2)) Then
-                                    If Stepkatamei(row(8))(row(2)) > row(6) Then
-                                        Stepkatamei(row(8))(row(2)) = row(6)
-                                    End If
-                                Else
-                                    If Now.AddDays(-1) > row(6) Then
-                                        Stepkatamei(row(8)).Add(row(2), row(6))
-                                    End If
-                                End If
-
-                            End If
-                        End If
-                    Next
-
+                    Continue For
                 End If
-                If Stepkanri.Count > 0 Or Stepkatamei.Count > 0 Then
 
-                    Dim AddressTable As DataTable
-                    Dim done As Boolean = False 'メールキャンセル
-                    AddressTable = getTable("MAIL", list(0)("DOC_ID"))
 
-                    'アドレスが取得できない場合は抜ける
-                    If AddressTable.Rows.Count > 0 Then
-                        'For Each address In AddressTable.Rows
-                        '    MailMsg.To.Add(address("MAIL_ADDRESS"))
-                        'Next
-                    Else
-                        Continue For
-                    End If
+                '件名の設定
+                strSubject.Length = 0
+                strSubject.AppendFormat("【作成期限通知】 製品開発管理表：{0}", list(0)("KANRI_NO").ToString)
 
-                    '件名の設定
-                    strSubject.Length = 0
-                    strSubject.AppendFormat("【作成期限通知】 製品開発管理表：{0}", list(0)("KANRI_NO").ToString)
-                    MailMsg.Subject = myEncode(strSubject.ToString, myEnc)
 
-                    '本文の設定
-                    strBody.Length = 0
+                '本文の設定
+                strBody.Length = 0
 
-                    strBody.Append("［社外秘］").AppendLine()
-                    strBody.AppendFormat("{0}で設定された文書作成予定日を過ぎております。", list(0)("KANRI_NO").ToString).AppendLine()
-                    strBody.Append("ご確認の上、速やかに文書作成または計画変更をお願い致します。").AppendLine()
+                strBody.Append("［社外秘］").AppendLine()
+                strBody.AppendFormat("{0}で設定された文書作成予定日を過ぎております。", list(0)("KANRI_NO").ToString).AppendLine()
+                strBody.Append("ご確認の上、速やかに文書作成または計画変更をお願い致します。").AppendLine()
+                strBody.AppendLine("")
+                strBody.AppendFormat("開発レベル : {0}", list(0)("KAI_LV_NAME").ToString).AppendLine()
+                strBody.AppendFormat("開発テーマ : {0}", list(0)("KENMEI").ToString).AppendLine()
+                strBody.AppendFormat("発行日 : {0:yyyy/MM/dd}", list(0)("HAKKO_DATE")).AppendLine()
+                If katameiFlg = False Then
                     strBody.AppendLine("")
-                    strBody.AppendFormat("開発レベル : {0}", list(0)("KAI_LV_NAME").ToString).AppendLine()
-                    strBody.AppendFormat("開発テーマ : {0}", list(0)("KENMEI").ToString).AppendLine()
-                    'strBody.AppendFormat("責任者 : {0}", list(0)("SEKININ_NAME").ToString).AppendLine()
-                    strBody.AppendFormat("発行日 : {0:yyyy/MM/dd}", list(0)("HAKKO_DATE")).AppendLine()
-                    If Stepkanri.Count > 0 Then
+                    strBody.Append("作成文書名                            作成予定日").AppendLine()
+                    strBody.Append("----------------------------------------------------------").AppendLine()
 
-                        strBody.AppendLine("")
-                        strBody.Append("作成文書名                            作成予定日").AppendLine()
-                        strBody.Append("----------------------------------------------------------").AppendLine()
+                    For Each Dichohyo In targetDict.Keys
+                        Dim parts As String() = Dichohyo.Split("|"c) '管理番号|形名|帳票コード
 
+
+                        Dim chohyoStr As String = parts(1)
 
                         For Each chohyoCd In ChohyoDic.Keys
-                            If Stepkanri.ContainsKey(chohyoCd) Then
+                            If chohyoStr = chohyoCd Then
                                 Dim width As Integer = 45 - ChohyoDic(chohyoCd).Length
                                 Dim label As String = ChohyoDic(chohyoCd).ToString().PadRight(width)
-                                strBody.Append(label).Append(Stepkanri(chohyoCd).ToString("yyyy/MM/dd")).AppendLine()
+                                strBody.Append(label).Append(targetDict(Dichohyo).ToString("yyyy/MM/dd")).AppendLine()
                                 intDataCnt += 1
                             End If
                         Next
-                    ElseIf Stepkatamei.Count > 0 Then
+                    Next
+                ElseIf katameiFlg = True Then
+                    Dim grouped = targetDict.Keys.Select(
+                        Function(k)
+                            Dim parts = k.Split("|"c)
+                            Return New With {
+                                .Key = k,
+                                .KanriNo = parts(0),
+                                .Katamei = parts(1),
+                                .ChohyoCd = parts(2),
+                                .YoteiDate = targetDict(k)
+                            }
+                        End Function).GroupBy(Function(x) x.Katamei)
 
-                        For Each keyOuter In Stepkatamei.Keys
-                            Dim karaCount As Integer = 0
-                            If Stepkatamei(keyOuter).Count < 1 Then
-                                karaCount += 1
-                                If karaCount = Stepkatamei.Count Then
-                                    done = True
-                                End If
-                                Continue For
+
+                    For Each katameiGroup In grouped
+                        strBody.AppendLine("")
+                        strBody.Append("----------------------------------------------------------").AppendLine()
+                        strBody.AppendLine(katameiGroup.Key)
+                        strBody.Append("----------------------------------------------------------").AppendLine()
+                        strBody.Append("作成文書名                            作成予定日").AppendLine()
+                        strBody.Append("----------------------------------------------------------").AppendLine()
+
+                        For Each item In katameiGroup
+                            If ChohyoDic.ContainsKey(item.ChohyoCd) Then
+                                Dim width As Integer = 45 - ChohyoDic(item.ChohyoCd).Length
+                                Dim label As String = ChohyoDic(item.ChohyoCd).PadRight(width)
+                                strBody.Append(label).Append(item.YoteiDate.ToString("yyyy/MM/dd")).AppendLine()
                             End If
-                            strBody.AppendLine("")
-                            strBody.Append("----------------------------------------------------------").AppendLine()
-                            strBody.AppendLine(keyOuter)
-                            strBody.Append("----------------------------------------------------------").AppendLine()
-                            strBody.Append("作成文書名                            作成予定日").AppendLine()
-                            strBody.Append("----------------------------------------------------------").AppendLine()
-
-                            For Each chohyoCd In ChohyoDic.Keys
-                                If Stepkatamei(keyOuter).ContainsKey(chohyoCd) Then
-                                    Dim width As Integer = 45 - ChohyoDic(chohyoCd).Length
-                                    Dim label As String = ChohyoDic(chohyoCd).ToString().PadRight(width)
-                                    strBody.Append(label).Append(Stepkatamei(keyOuter)(chohyoCd).ToString("yyyy/MM/dd")).AppendLine()
-                                End If
-                            Next
-
                         Next
-                    End If
-                    If done = True Then Continue For
-                    strBody.AppendLine()
-                    strBody.Append("確認URL：").AppendLine()
-                    strBody.AppendFormat(strTopUrl, list(0)("DOC_ID").ToString).AppendLine()
-                    strBody.Append("----------------------------------------------------------------------------").AppendLine()
-                    strBody.Append("このメールは「製品開発管理ワークフローシステム」から自動送信されたものです")
+                    Next
+                End If
+                strBody.AppendLine()
+                strBody.Append("確認URL：").AppendLine()
+                strBody.AppendFormat(strTopUrl, list(0)("DOC_ID").ToString).AppendLine()
+                strBody.Append("----------------------------------------------------------------------------").AppendLine()
+                strBody.Append("このメールは「製品開発管理ワークフローシステム」から自動送信されたものです")
 
+                Using MailMsg As New MailMessage
+                    MailMsg.From = New MailAddress(strFromAdd)
+
+                    For Each addr In addressList
+                        MailMsg.To.Add(addr)
+                    Next
+
+                    MailMsg.Subject = myEncode(strSubject.ToString, myEnc)
                     MailMsg.IsBodyHtml = False
                     Dim altView As AlternateView = AlternateView.CreateAlternateViewFromString(strBody.ToString, myEnc, System.Net.Mime.MediaTypeNames.Text.Plain)
                     altView.TransferEncoding = System.Net.Mime.TransferEncoding.SevenBit
@@ -414,16 +399,16 @@ Module mdlMain
                     strLog.AppendLine()
                     strLog.AppendLine(strBody.ToString)
                     ConsoleWriteLine(strLog.ToString, , 0)
-                Else
-                    Continue For
-                End If
+                End Using
+
+
             Next
             Return True
 
         Catch ex As Exception
             'エラーメッセージ
             ConsoleWriteLine("メール送信エラー", ex)
-            Throw ex
+            Throw
         End Try
     End Function
 
